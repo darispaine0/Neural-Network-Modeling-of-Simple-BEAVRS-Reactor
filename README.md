@@ -3,5 +3,6 @@
 3. Generate data in batches and save to a "batch folder" using the ExampleDataGenerator.py. You will have to change the batch folder directory to exist within the training_data folder
 4. Once all the data is generated in batches, the consolidate_training.py will create final .npy files with consolidated data from all the batches (this is nice if certain batches become corrupt)
 5. Now run the FM_cleaner.py, this will remove all zeros and store the masks within training_data (Note: you will also have to change the assignment of "data_dir" to the training_data folder within your system)
-6. With a cleaned dataset and a stored mask, run the nn1HiddenInterpolClean.py script. You will also have to change the directories within this file to match wherever your data is stored. I would suggest keeping all data in a single "training_data"
+6. Run remove_fuel_zeros.py to clean the temperature data as well. 
+7. With a cleaned dataset and a stored mask, run the nn1HiddenInterpolClean.py script. You will also have to change the directories within this file to match wherever your data is stored. I would suggest keeping all data in a single "training_data"
 
