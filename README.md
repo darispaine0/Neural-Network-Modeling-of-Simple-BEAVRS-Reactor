@@ -1,5 +1,5 @@
 1. Make sure to save all these scripts in a parent folder containing another folder named "training_data"
-2. You will need the required libraries and the endfb-viii.0-hdf5 material data.
+2. You will need the required libraries and the endfb-viii.0-hdf5 nuclear data.
 3. Generate data in batches and save to a "batch folder" using the ExampleDataGenerator.py. You will have to change the batch folder directory to exist within the training_data folder
 4. Once all the data is generated in batches, the consolidate_training.py will create final .npy files with consolidated data from all the batches (this is nice if certain batches become corrupt)
 5. Now run the FM_cleaner.py, this will remove all zeros and store the masks within training_data (Note: you will also have to change the assignment of "data_dir" to the training_data folder within your system)
