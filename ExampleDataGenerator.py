@@ -8,11 +8,11 @@ Ensures proper data format compatibility with downstream consolidation and train
 
 Usage:
     Interactive mode (will prompt for inputs):
-        python openmc_data_generator_v2.py
+        python ExampleDataGenerator.py
     
     Command-line mode:
-        python openmc_data_generator_v2.py --runs 100 [options]
-        python openmc_data_generator_v2.py -n 50 --particles 100000 --temp-min 300 --temp-max 900
+        python ExampleDataGenerator.py --runs 100 [options]
+        python ExampleDataGenerator.py -n 50 --particles 100000 --temp-min 300 --temp-max 900
     
     Options:
         --runs, -n          Number of simulation runs (REQUIRED in CLI mode)
@@ -26,9 +26,8 @@ Usage:
     
 For local environment setup:
     1. conda activate openmc-env
-    2. cd ~/Monte_Carlo/Test
-    3. export OPENMC_CROSS_SECTIONS=/mnt/c/Users/Daris/Downloads/endfb80/endfb-viii.0-hdf5/cross_sections.xml
-    4. export OPENMC_DATA=/mnt/c/Users/Daris/Downloads/endfb80/endfb-viii.0-hdf5
+    2. export OPENMC_CROSS_SECTIONS=/path/to/endfb-viii.0-hdf5/cross_sections.xml
+    3. export OPENMC_DATA=/path/to/endfb-viii.0-hdf5
 """
 
 import numpy as np
@@ -39,6 +38,8 @@ import argparse
 from pathlib import Path
 from datetime import datetime
 import json
+import os
+import h5py
 
 
 # ============================================================================
@@ -310,59 +311,79 @@ def run_simulation(assembly):
 # ============================================================================
 # Results Processing
 # ============================================================================
-def extract_results(statepoint_file='statepoint.100.h5'):
+def extract_results(statepoint_file=None, batches=100):
     """
-    Extract k-eff and tally results from statepoint file.
-    
+    Extract k-eff (track-length estimator) and tally results from statepoint file.
+
     Returns:
         dict: Contains keff, source, tallies_raw, and uncertainties
     """
     print("Analyzing results...")
+    if statepoint_file is None:
+        statepoint_file = f'statepoint.{batches}.h5'
+
     with openmc.StatePoint(filepath=statepoint_file) as output:
-        keff = output.keff
+        gt = output.global_tallies
+
+        def norm(name):
+            if isinstance(name, bytes):
+                name = name.decode('utf-8', errors='ignore')
+            return name.replace('\x00', '').strip()
+
+        keff_mean = keff_std = None
+        available = []
+        for row in gt:
+            name = norm(row['name'])
+            available.append(name)
+            # Stored name is 'k-tracklength' (no hyphen/space inside, no parentheses)
+            if name.lower() == 'k-tracklength':
+                keff_mean = float(row['mean'])
+                keff_std = float(row['std_dev'])
+                break
+
+        if keff_mean is None:
+            raise ValueError(
+                "Track-length keff not found in global_tallies.\n"
+                f"Available global tally names: {available}"
+            )
+
         source_tally = output.get_tally(name='Fission source')
         fm_tally = output.get_tally(name='Fission matrix')
-    
+
     results = {
-        'keff_mean': keff.nominal_value.real,
-        'keff_std': keff.std_dev.real,
+        'keff_mean': keff_mean,
+        'keff_std': keff_std,
         'source_mean': source_tally.mean.squeeze(),
         'source_std': source_tally.std_dev.squeeze(),
         'tallies_raw_mean': fm_tally.mean.squeeze(),
         'tallies_raw_std': fm_tally.std_dev.squeeze()
     }
-    
-    print(f"  k-eff: {results['keff_mean']:.6f} ± {results['keff_std']:.6f}")
+
+    print(f"  k-eff (track-length): {results['keff_mean']:.6f} ± {results['keff_std']:.6f}")
     return results
+
+
 
 
 def build_normalized_fission_matrix(tallies_raw, n_cells):
     """
     Construct normalized fission matrix from raw tally data.
-    
-    The normalization ensures each column sums to the total fission rate,
-    representing the probability distribution of fission sites given a 
-    birth location.
-    
-    Args:
-        tallies_raw: Raw fission matrix data (flattened, length n_cells²)
-        n_cells: Number of cells (289)
-        
-    Returns:
-        numpy.ndarray: Normalized fission matrix (n_cells x n_cells)
+    Replicates original v1 normalization exactly.
     """
     print("Building normalized fission matrix...")
+    
+    total = tallies_raw.sum()
+    fm_raw_2d = tallies_raw.reshape(n_cells, n_cells)
     fm = np.zeros((n_cells, n_cells), dtype=float)
     
-    for i in range(n_cells):
-        for j in range(n_cells):
-            idx = i * n_cells + j
-            if tallies_raw[idx] > 0:
-                row_sum = np.sum(tallies_raw[j*n_cells:(j+1)*n_cells])
-                if row_sum > 0: 
-                    fm[i, j] = tallies_raw[idx] / row_sum * np.sum(tallies_raw)
-    print(f"Sum of tallies_raw: {np.sum(tallies_raw)}")
-    # Diagnostic: Check sparsity pattern
+    # For each (i, j) pair: fm[i,j] = fm_raw[i,j] / sum(fm_raw[j, :]) * total
+    # This matches v1: fm_raw[idx] / sum(fm_raw[j*N_cells:(j+1)*N_cells]) * sum(fm_raw)
+    for j in range(n_cells):
+        row_j_sum = fm_raw_2d[j, :].sum()  # sum over row j (the born cell)
+        if row_j_sum > 0:
+            fm[:, j] = fm_raw_2d[:, j] / row_j_sum * total
+
+    # Diagnostic
     nonzero_count = np.count_nonzero(fm)
     sparsity = 1.0 - (nonzero_count / fm.size)
     print(f"  Matrix sparsity: {sparsity*100:.2f}% ({nonzero_count}/{fm.size} nonzero)")
@@ -375,29 +396,40 @@ def analyze_fission_matrix_sparsity(fm, n_cells):
     Analyze and report fission matrix sparsity characteristics.
     
     This diagnostic helps identify the minimum number of rows needed
-    to capture 99% of fission neutrons from each column.
+    to capture 99% of fission neutrons from each column, after removing
+    zero and NaN rows from consideration.
     """
     n_rows_99_min = n_cells
     
     for j in range(n_cells):
         col_vec = fm[:, j]
-        if np.all(np.isnan(col_vec)) or np.all(col_vec == 0):
+
+        # Filter out zero and NaN entries
+        valid_mask = np.isfinite(col_vec) & (col_vec != 0)
+        col_valid = col_vec[valid_mask]
+
+        if col_valid.size == 0:
             continue
-        
-        col_sum = np.sum(col_vec)
+
+        col_sum = np.sum(col_valid)
         if col_sum == 0 or not np.isfinite(col_sum):
             continue
-            
-        col_frac = col_vec / col_sum
+
+        col_frac = col_valid / col_sum
         sorted_fracs = np.sort(col_frac)[::-1]
         cumulative = np.cumsum(sorted_fracs)
-        n_rows_99 = np.argmax(cumulative >= 0.99) + 1
-        
+
+        indices = np.where(cumulative >= 0.99)[0]
+        if len(indices) == 0:
+            print(f"  Warning: Column {j} never reaches 99% cumulative fraction.")
+            continue
+        n_rows_99 = indices[0] + 1
+
         if n_rows_99 < n_rows_99_min:
             n_rows_99_min = n_rows_99
-            print(f"  Column {j}: {n_rows_99}/{n_cells} rows for 99% contribution")
+            print(f"  Column {j}: {n_rows_99}/{col_valid.size} rows for 99% contribution")
             print(f"    Top row: {sorted_fracs[0]*100:.2f}%")
-    
+
     return n_rows_99_min
 
 
@@ -647,6 +679,7 @@ class DataCollector:
         np.save(output_dir / config.OUTPUT_KEFF_UNC_FILE, np.array(self.keff_uncertainty_data, dtype=object))
         np.save(output_dir / config.OUTPUT_SOURCE_UNC_FILE, np.array(self.source_uncertainty_data, dtype=object))
         
+        
         # Save metadata JSON
         metadata_path = output_dir / "run_metadata.json"
         with open(metadata_path, 'w') as f:
@@ -740,7 +773,7 @@ def main():
         except (ValueError, KeyboardInterrupt) as e:
             print(f"\nError or interruption: {e}")
             print("Please provide valid inputs or use command-line arguments.")
-            print("Usage: python openmc_data_generator_v2.py --runs N [options]")
+            print("Usage: python ExampleDataGenerator.py --runs N [options]")
             return
     else:
         args = parse_arguments()
@@ -769,9 +802,14 @@ def main():
     
     # Run simulations
     for run_idx in range(args.runs):
-        print(f"\n{'='*80}")
-        print(f"Run {run_idx+1}/{args.runs}")
-        print(f"{'='*80}")
+        # Remove stale statepoint before running
+        statepoint_file = f'statepoint.{args.batches}.h5'
+        if os.path.exists(statepoint_file):
+            os.remove(statepoint_file)
+            print(f"  Removed stale {statepoint_file}")
+            print(f"\n{'='*80}")
+            print(f"Run {run_idx+1}/{args.runs}")
+            print(f"{'='*80}")
         
         # Setup geometry
         assembly, geometry, lattice = setup_pwr_assembly_geometry()
@@ -799,7 +837,7 @@ def main():
         run_simulation(assembly)
         
         # Extract results
-        results = extract_results()
+        results = extract_results(batches=args.batches)
         
         # Build normalized fission matrix
         fm_normalized = build_normalized_fission_matrix(results['tallies_raw_mean'], config.N_CELLS)
