@@ -4,7 +4,7 @@ Code for *Learning Non-Uniform Temperature Feedback in the Fission Matrix Method
 
 A feed-forward neural network predicts how non-uniform fuel and moderator temperatures change the fission matrix (FM) of the OpenMC 17×17 BEAVRS PWR assembly. The network does not predict the FM from scratch. It learns a correction to a reference FM that is interpolated row by row from 13 uniform-temperature reference matrices. Training uses a loss on the FM, on k_eff, and on the fission source, computed through a differentiable power iteration.
 
-This branch (`evaluation`) holds the full pipeline from `main` plus the scripts used for the paper's figures and tables; see [Evaluation scripts](#evaluation-scripts) at the end.
+This branch (`main`) holds the pipeline that reproduces the paper. The scripts used for the paper's figures and tables are on the [`evaluation`](../../tree/evaluation) branch.
 
 ## Pipeline
 
@@ -140,33 +140,3 @@ The checkpoint, per-sample pcm errors and a `meta.json` summary are written to `
   ds3_hparam_search_results/
   ds3_fm_keff_loss_results/
   ```
-
-## Evaluation scripts
-
-These reproduce the figures and tables in the paper. Run them after step 5, from the repository folder.
-
-Most of them load a trained checkpoint through a `CHECKPOINT_PATH` setting near the top of the file. Point it at the run folder that `nnSource.py` created under `ds3_fm_keff_loss_results/`.
-
-| Script | Paper | What it does |
-|---|---|---|
-| `DStester.py` | §3.3, Table 4 | Trains the four data structures (DS1–DS4) with no transform, ln and sqrt, five seeds each |
-| `hiddenLayerSweep.py` | §3.9, Fig. 11 (left) | Hidden-layer width sweep |
-| `ConvergenceStudy.py` | §3.9, Fig. 11 (right) | Training-set size sweep |
-| `ConvergenceEqnFit2.py` | §2.9, §3.9, Table 3 | Fits the ten candidate convergence models; the sweep results are typed into the script |
-| `TempNNEffects.py` | §3.5 | Evaluates the trained model on every sample and writes `fm_best_worst_pcm_results.npz` |
-| `plot_pcm_distribution.py` | §3.5, Fig. 8 | Per-sample pcm error ranked best to worst, with k_eff and temperature std |
-| `BestWorstTemps.py` | §3.6, Fig. 9 | Fuel and moderator temperature maps of the best and worst samples |
-| `MinMaxTemps.py` | §3.6 | Distribution of per-sample temperature standard deviations |
-| `TempNNRefEffects.py` | §3.7, Fig. 10 | pcm error for uniform-temperature inputs at each reference temperature |
-| `print_nn_stats.py` | §3.8, Table 6 | Neural-network summary statistics |
-| `refFMErr.py` | §3.8, Table 6 | LaTeX table comparing interpolation-only and neural-network errors |
-| `LossContribution.py` | §3.10, Fig. 13 | Trains the final model while tracking each weighted loss term per epoch |
-| `DataGenerationTiming.py` | §3.11 | Average OpenMC runtime per sample |
-| `nnTimer.py` | §3.11 | Average neural-network inference time |
-
-Run order:
-
-- `plot_pcm_distribution.py`, `BestWorstTemps.py`, `print_nn_stats.py` and `refFMErr.py` read `fm_best_worst_pcm_results.npz`, so run `TempNNEffects.py` first.
-- `refFMErr.py` also needs `ref_matrix_pcm_results.npz` (the interpolation-only baseline). The script that makes that file is not in this repository.
-
-`DStester.py`, `hiddenLayerSweep.py`, `ConvergenceStudy.py`, `LossContribution.py` and `TempNNEffects.py` read the FM eigenvalue (`h5["keff"]`) as the reference k_eff. To match `nnSource.py`, change it to `h5["keff_tracklength"]`.
