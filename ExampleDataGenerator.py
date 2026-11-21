@@ -168,6 +168,10 @@ def assign_dual_temperatures(lattice, temp_min, temp_max, n_rows, n_cols, valida
             uni = lattice.universes[i][j]
             if uni is None:
                 continue
+            # Give each lattice position its own universe copy; otherwise all
+            # pins share one cell object and only the last temperature survives.
+            uni = uni.clone(clone_materials=False, clone_regions=False)
+            lattice.universes[i][j] = uni
             
             fuel_temp = 0.0
             nonfuel_temp = 0.0
